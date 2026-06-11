@@ -207,6 +207,11 @@ small.hint{color:#8a8f9a}
       <button id="ghPush" class="on">☁⬆ Push current map</button>
     </div>
     <div id="ghStatus" class="hint"></div>
+    <div style="display:flex;gap:6px;align-items:center;margin-top:2px">
+      <input id="ghShareUrl" type="text" readonly placeholder="push a map, then copy its player link" style="flex:1">
+      <button id="ghCopyShare" class="ib">Copy link</button>
+    </div>
+    <small class="hint">Player link — read-only, no login needed. Valid once the map is pushed.</small>
   </div>
 </div></div>
 <div id="gamesmodal" class="modal"><div id="gamesbox" class="mbox" style="width:440px">
@@ -1021,7 +1026,7 @@ async function ghPushCurrent(quiet){
     let m=(g.maps=g.maps||[]).find(x=>x.slug===map);if(!m){m={slug:map};g.maps.push(m)}
     m.title=st.title;m.path=path;m.updated=Date.now();
     await ghPutFile('saves/index.json',JSON.stringify(man,null,2),'index: '+st.title);
-    set('✓ pushed '+path);if(!quiet)msg('pushed to GitHub');
+    set('✓ pushed '+path);const su=$('#ghShareUrl');if(su)su.value=shareUrl(game,map);if(!quiet)msg('pushed to GitHub');
   }catch(e){set('✗ '+e.message);if(!quiet)msg('GitHub push failed: '+e.message)}
 }
 let ghAutoT=null;
@@ -1040,10 +1045,18 @@ function enterPlayerMode(){
   ui.mode='player';document.body.classList.add('player');
   $('#modeBtn').textContent='⬅ back to GM';setTool('select');ui.aoe=null;draw();renderSide();
 }
+function shareUrl(game,map){return location.origin+location.pathname+'?game='+encodeURIComponent(game)+'&map='+encodeURIComponent(map)}
+function curShareUrl(){return shareUrl(slug(st.campaign||'default'),slug(st.title))}
+function copyShare(t){
+  const ok=()=>msg('link copied');
+  const fb=()=>{const ta=document.createElement('textarea');ta.value=t;document.body.appendChild(ta);ta.select();try{document.execCommand('copy');ok()}catch(e){msg('copy failed')}ta.remove()};
+  if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(t).then(ok,fb);else fb();
+}
 function fillSyncForm(){const c=ghCfg();
   $('#ghOwner').value=c.owner;$('#ghRepo').value=c.repo;$('#ghBranch').value=c.branch;$('#ghToken').value=c.token;
   $('#ghAuto').checked=localStorage.getItem('gct_gh_auto')==='1';
   $('#ghStatus').textContent=c.token?(c.owner&&c.repo?'Ready — '+c.owner+'/'+c.repo+'@'+c.branch:'Set owner/repo'):'No token yet';
+  $('#ghShareUrl').value=curShareUrl();
 }
 $('#syncBtn').onclick=()=>{fillSyncForm();$('#syncmodal').style.display='flex'};
 $('#syncClose').onclick=()=>$('#syncmodal').style.display='none';
@@ -1055,6 +1068,7 @@ $('#ghSaveCfg').onclick=()=>{
   fillSyncForm();msg('GitHub settings saved');
 };
 $('#ghPush').onclick=()=>ghPushCurrent(false);
+$('#ghCopyShare').onclick=()=>{const u=$('#ghShareUrl').value;if(u)copyShare(u)};
 $('#gamesBtn').onclick=()=>{$('#gamesmodal').style.display='flex';renderGames()};
 $('#gamesClose').onclick=()=>$('#gamesmodal').style.display='none';
 $('#gamesmodal').onclick=e=>{if(e.target.id==='gamesmodal')$('#gamesmodal').style.display='none'};
@@ -1069,7 +1083,8 @@ async function renderGames(){
     const h=document.createElement('div');h.className='fgroup';h.textContent=g.game||g.slug;L.appendChild(h);
     (g.maps||[]).slice().sort((a,b)=>(b.updated||0)-(a.updated||0)).forEach(m=>{
       const d=document.createElement('div');d.className='frow';
-      d.innerHTML='<span class="nm">'+esc(m.title||m.slug)+'</span><span class="fdate">'+(m.updated?new Date(m.updated).toLocaleDateString():'')+'</span>';
+      d.innerHTML='<span class="nm">'+esc(m.title||m.slug)+'</span><span class="fdate">'+(m.updated?new Date(m.updated).toLocaleDateString():'')+'</span><button class="ib" data-a="link" title="copy player link">🔗</button>';
+      d.querySelector('[data-a=link]').onclick=e=>{e.stopPropagation();copyShare(shareUrl(g.slug,m.slug))};
       d.querySelector('.nm').onclick=async()=>{
         try{pushUndo();await ghLoadMap(g.slug,m.slug);$('#gamesmodal').style.display='none';
           if(ui.mode==='player')enterPlayerMode();msg('loaded '+(m.title||m.slug));
