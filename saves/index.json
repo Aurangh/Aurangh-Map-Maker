@@ -8,6 +8,12 @@
         "title": "New Encounter",
         "path": "saves/default/new-encounter.json",
         "updated": 1781198153401
+      },
+      {
+        "slug": "new-encounter-bels-test",
+        "title": "New Encounter Bels test",
+        "path": "saves/default/new-encounter-bels-test.json",
+        "updated": 1781198307546
       }
     ]
   }
