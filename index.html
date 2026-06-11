@@ -68,6 +68,10 @@ small.hint{color:#8a8f9a}
 .pcrow .chip{width:32px;height:32px;font-size:14px}
 .pcstats{display:flex;gap:10px;font-size:12px;flex-wrap:wrap}
 .pcstats b{color:#fff}
+#syncbox label{display:flex;flex-direction:column;gap:2px;font-size:12px;color:#9aa0ac}
+#syncbox input{width:100%}
+#syncbox label.ckrow{flex-direction:row;align-items:center;gap:6px;color:var(--tx)}
+#syncbox label.ckrow input{width:auto}
 </style></head><body>
 <div id="top">
   <input id="title" type="text">
@@ -83,6 +87,8 @@ small.hint{color:#8a8f9a}
   <button id="bgRemove" class="gmonly" style="display:none">Remove bg</button>
   <button id="filesBtn" class="gmonly">🗂 Maps</button>
   <button id="saveBtn" class="gmonly">Save</button>
+  <button id="syncBtn" class="gmonly" title="GitHub sync settings">☁ GitHub</button>
+  <button id="gamesBtn" title="open a saved game from GitHub">🌐 Games</button>
   <button id="expJson" class="gmonly">JSON ⬇</button>
   <button id="impJson" class="gmonly">JSON ⬆</button>
   <button id="expPng">PNG ⬇</button>
@@ -186,6 +192,27 @@ small.hint{color:#8a8f9a}
   </header>
   <div id="icwrap"><canvas id="icv"></canvas></div>
 </div></div>
+<div id="syncmodal" class="modal"><div id="syncbox" class="mbox" style="width:440px">
+  <header><b>GitHub sync</b><span style="flex:1"></span><button id="syncClose">✕</button></header>
+  <div style="padding:10px 12px;display:flex;flex-direction:column;gap:8px">
+    <small class="hint">Saves commit JSON to your repo (one folder per game). Players open a link and read it — they need no token.</small>
+    <label>Owner <input id="ghOwner" type="text" placeholder="BelGarreth"></label>
+    <label>Repo <input id="ghRepo" type="text" placeholder="Auranghzebs-Map-Maker"></label>
+    <label>Branch <input id="ghBranch" type="text" placeholder="main"></label>
+    <label>Fine-grained token (Contents: read &amp; write) <input id="ghToken" type="password" placeholder="github_pat_…"></label>
+    <small class="hint">Stored only in this browser (localStorage). Never committed. Players never need this.</small>
+    <label class="ckrow"><input id="ghAuto" type="checkbox"> Auto-push after edits (debounced ~20s)</label>
+    <div style="display:flex;gap:6px;flex-wrap:wrap">
+      <button id="ghSaveCfg">Save settings</button>
+      <button id="ghPush" class="on">☁⬆ Push current map</button>
+    </div>
+    <div id="ghStatus" class="hint"></div>
+  </div>
+</div></div>
+<div id="gamesmodal" class="modal"><div id="gamesbox" class="mbox" style="width:440px">
+  <header><b>Games on GitHub</b><span style="flex:1"></span><button id="ghReload" class="ib">↻ refresh</button><button id="gamesClose">✕</button></header>
+  <div id="gameslist" style="padding:8px 12px;overflow-y:auto;max-height:70vh"></div>
+</div></div>
 <div id="msg"></div>
 <script>
 "use strict";
@@ -224,7 +251,7 @@ let lib=[],files={};
 let ui={tool:'select',pal:1,mode:'gm',placing:null,drag:null,measure:null,rect:null,painting:false,imgTarget:null,sel:null,aoe:null};
 let saveT=null;
 function touch(){draw();renderSide();renderLog();clearTimeout(saveT);
-  saveT=setTimeout(()=>{idb.set('state',JSON.parse(JSON.stringify(st)))},600)}
+  saveT=setTimeout(()=>{idb.set('state',JSON.parse(JSON.stringify(st)))},600);ghAutoSync()}
 function msg(t){const m=$('#msg');m.textContent=t;m.style.opacity=1;clearTimeout(m._t);m._t=setTimeout(()=>m.style.opacity=0,2400)}
 function colName(i){let s='';i++;while(i>0){i--;s=String.fromCharCode(65+i%26)+s;i=Math.floor(i/26)}return s}
 function idx(x,y){return y*st.cols+x}
@@ -944,6 +971,115 @@ document.addEventListener('keydown',e=>{
   if(t&&(ui.mode==='gm'||['select','measure'].includes(t)))setTool(t);
 });
 
+// ---------- GitHub sync ----------
+const GH_STRIP_BG=true; // keep commits small — imported backgrounds stay local-only
+function slug(s){return String(s||'').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'')||'untitled'}
+function ghDetect(){
+  const h=location.hostname,parts=location.pathname.split('/').filter(Boolean);
+  let owner='',repo='';
+  if(h.endsWith('.github.io')){owner=h.split('.')[0];repo=parts[0]||''}
+  return{owner,repo,branch:'main'};
+}
+function ghCfg(){
+  let saved={};try{saved=JSON.parse(localStorage.getItem('gct_gh_cfg')||'{}')}catch(e){}
+  const d=ghDetect();
+  return{owner:saved.owner||d.owner,repo:saved.repo||d.repo,branch:saved.branch||d.branch||'main',token:localStorage.getItem('gct_gh_token')||''};
+}
+function b64enc(s){return btoa(unescape(encodeURIComponent(s)))}
+function b64dec(s){return decodeURIComponent(escape(atob(s)))}
+function ghHeaders(token){const h={'Accept':'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28'};if(token)h.Authorization='Bearer '+token;return h}
+async function ghGetFile(path){
+  const c=ghCfg();if(!c.owner||!c.repo)throw new Error('set owner/repo in ☁ GitHub');
+  const url='https://api.github.com/repos/'+c.owner+'/'+c.repo+'/contents/'+path+'?ref='+encodeURIComponent(c.branch)+'&t='+Date.now();
+  const r=await fetch(url,{headers:ghHeaders(c.token),cache:'no-store'});
+  if(r.status===404)return null;
+  if(!r.ok)throw new Error('GitHub GET '+r.status);
+  const j=await r.json();
+  return{sha:j.sha,text:b64dec((j.content||'').replace(/\n/g,''))};
+}
+async function ghPutFile(path,text,message){
+  const c=ghCfg();if(!c.token)throw new Error('no token');
+  let sha=null;try{const ex=await ghGetFile(path);if(ex)sha=ex.sha}catch(e){}
+  const url='https://api.github.com/repos/'+c.owner+'/'+c.repo+'/contents/'+path;
+  const send=sh=>{const body={message,content:b64enc(text),branch:c.branch};if(sh)body.sha=sh;
+    return fetch(url,{method:'PUT',headers:Object.assign({'Content-Type':'application/json'},ghHeaders(c.token)),body:JSON.stringify(body)})};
+  let r=await send(sha);
+  if(r.status===409||r.status===422){const ex=await ghGetFile(path);r=await send(ex?ex.sha:null)}
+  if(!r.ok)throw new Error('GitHub PUT '+r.status+' '+(await r.text()).slice(0,100));
+}
+function ghSerialize(){const d=JSON.parse(JSON.stringify(st));if(GH_STRIP_BG)d.bgImg=null;return JSON.stringify(d)}
+async function ghPushCurrent(quiet){
+  const set=t=>{const e=$('#ghStatus');if(e)e.textContent=t};
+  try{
+    if(!ghCfg().token){set('No token — enter one and Save settings.');if(!quiet)msg('no GitHub token set');return}
+    const game=slug(st.campaign||'default'),map=slug(st.title),path='saves/'+game+'/'+map+'.json';
+    set('Pushing '+path+' …');
+    await ghPutFile(path,ghSerialize(),'map: '+st.title+' ['+game+']');
+    let man=[];try{const ex=await ghGetFile('saves/index.json');if(ex)man=JSON.parse(ex.text)}catch(e){}
+    let g=man.find(x=>x.slug===game);if(!g){g={game:st.campaign||'default',slug:game,maps:[]};man.push(g)}
+    g.game=st.campaign||'default';
+    let m=(g.maps=g.maps||[]).find(x=>x.slug===map);if(!m){m={slug:map};g.maps.push(m)}
+    m.title=st.title;m.path=path;m.updated=Date.now();
+    await ghPutFile('saves/index.json',JSON.stringify(man,null,2),'index: '+st.title);
+    set('✓ pushed '+path);if(!quiet)msg('pushed to GitHub');
+  }catch(e){set('✗ '+e.message);if(!quiet)msg('GitHub push failed: '+e.message)}
+}
+let ghAutoT=null;
+function ghAutoSync(){
+  if(localStorage.getItem('gct_gh_auto')!=='1')return;
+  if(ui.mode==='player'||!ghCfg().token)return;
+  clearTimeout(ghAutoT);ghAutoT=setTimeout(()=>ghPushCurrent(true),20000);
+}
+async function ghFetchManifest(){try{const ex=await ghGetFile('saves/index.json');return ex?JSON.parse(ex.text):[]}catch(e){return[]}}
+async function ghLoadMap(game,map){
+  const ex=await ghGetFile('saves/'+game+'/'+map+'.json');
+  if(!ex)throw new Error('map not found on GitHub');
+  loadState(JSON.parse(ex.text));
+}
+function enterPlayerMode(){
+  ui.mode='player';document.body.classList.add('player');
+  $('#modeBtn').textContent='⬅ back to GM';setTool('select');ui.aoe=null;draw();renderSide();
+}
+function fillSyncForm(){const c=ghCfg();
+  $('#ghOwner').value=c.owner;$('#ghRepo').value=c.repo;$('#ghBranch').value=c.branch;$('#ghToken').value=c.token;
+  $('#ghAuto').checked=localStorage.getItem('gct_gh_auto')==='1';
+  $('#ghStatus').textContent=c.token?(c.owner&&c.repo?'Ready — '+c.owner+'/'+c.repo+'@'+c.branch:'Set owner/repo'):'No token yet';
+}
+$('#syncBtn').onclick=()=>{fillSyncForm();$('#syncmodal').style.display='flex'};
+$('#syncClose').onclick=()=>$('#syncmodal').style.display='none';
+$('#syncmodal').onclick=e=>{if(e.target.id==='syncmodal')$('#syncmodal').style.display='none'};
+$('#ghSaveCfg').onclick=()=>{
+  localStorage.setItem('gct_gh_cfg',JSON.stringify({owner:$('#ghOwner').value.trim(),repo:$('#ghRepo').value.trim(),branch:$('#ghBranch').value.trim()||'main'}));
+  const t=$('#ghToken').value.trim();if(t)localStorage.setItem('gct_gh_token',t);else localStorage.removeItem('gct_gh_token');
+  localStorage.setItem('gct_gh_auto',$('#ghAuto').checked?'1':'0');
+  fillSyncForm();msg('GitHub settings saved');
+};
+$('#ghPush').onclick=()=>ghPushCurrent(false);
+$('#gamesBtn').onclick=()=>{$('#gamesmodal').style.display='flex';renderGames()};
+$('#gamesClose').onclick=()=>$('#gamesmodal').style.display='none';
+$('#gamesmodal').onclick=e=>{if(e.target.id==='gamesmodal')$('#gamesmodal').style.display='none'};
+$('#ghReload').onclick=renderGames;
+async function renderGames(){
+  const L=$('#gameslist');L.innerHTML='<small class="hint">loading…</small>';
+  let man;try{man=await ghFetchManifest()}catch(e){L.innerHTML='<small class="hint">could not reach GitHub: '+esc(e.message)+'</small>';return}
+  if(!man.length){L.innerHTML='<small class="hint">no games on GitHub yet — push a map from ☁ GitHub</small>';return}
+  L.innerHTML='';
+  man.sort((a,b)=>String(a.game||'').localeCompare(String(b.game||'')));
+  man.forEach(g=>{
+    const h=document.createElement('div');h.className='fgroup';h.textContent=g.game||g.slug;L.appendChild(h);
+    (g.maps||[]).slice().sort((a,b)=>(b.updated||0)-(a.updated||0)).forEach(m=>{
+      const d=document.createElement('div');d.className='frow';
+      d.innerHTML='<span class="nm">'+esc(m.title||m.slug)+'</span><span class="fdate">'+(m.updated?new Date(m.updated).toLocaleDateString():'')+'</span>';
+      d.querySelector('.nm').onclick=async()=>{
+        try{pushUndo();await ghLoadMap(g.slug,m.slug);$('#gamesmodal').style.display='none';
+          if(ui.mode==='player')enterPlayerMode();msg('loaded '+(m.title||m.slug));
+        }catch(e){msg('load failed: '+e.message)}
+      };
+      L.appendChild(d);
+    });
+  });
+}
+
 // ---------- init ----------
 function loadState(s){
   st=Object.assign(freshState(),s);
@@ -964,7 +1100,14 @@ function loadState(s){
   }catch(e){}
   lib=l||[];files=f||{};
   aoeSizes();
-  loadState(s||freshState());
+  const _p=new URLSearchParams(location.search),_pg=_p.get('game'),_pm=_p.get('map');
+  if(_pg&&_pm){
+    loadState(freshState());
+    try{await ghLoadMap(_pg,_pm);enterPlayerMode();}
+    catch(e){msg('could not load shared map: '+(e&&e.message||e))}
+  }else{
+    loadState(s||freshState());
+  }
   renderLib();
   setTool('select');
 })();

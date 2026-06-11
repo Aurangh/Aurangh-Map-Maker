@@ -1,0 +1,4 @@
+.DS_Store
+# never commit tokens
+*.token
+*.pat
