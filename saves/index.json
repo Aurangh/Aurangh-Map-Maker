@@ -1,1 +1,14 @@
-[]
+[
+  {
+    "game": "default",
+    "slug": "default",
+    "maps": [
+      {
+        "slug": "new-encounter",
+        "title": "New Encounter",
+        "path": "saves/default/new-encounter.json",
+        "updated": 1781198153401
+      }
+    ]
+  }
+]
