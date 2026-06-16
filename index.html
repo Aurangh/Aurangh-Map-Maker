@@ -86,6 +86,7 @@ small.hint{color:#8a8f9a}
   <button id="importBtn" class="gmonly">🖼 Import map</button>
   <button id="bgRemove" class="gmonly" style="display:none">Remove bg</button>
   <button id="filesBtn" class="gmonly">🗂 Maps</button>
+  <button id="notesBtn" class="gmonly">📖 Encounter</button>
   <button id="saveBtn" class="gmonly">Save</button>
   <button id="syncBtn" class="gmonly" title="GitHub sync settings">☁ GitHub</button>
   <button id="gamesBtn" title="open a saved game from GitHub">🌐 Games</button>
@@ -95,6 +96,7 @@ small.hint{color:#8a8f9a}
   <input id="file" type="file" accept=".json" style="display:none">
   <input id="imgfile" type="file" accept="image/*" style="display:none">
   <input id="mapimgfile" type="file" accept="image/*" style="display:none">
+  <input id="mdfile" type="file" accept=".md,.markdown,.txt" style="display:none">
 </div>
 <div id="main">
   <div id="tools">
@@ -218,6 +220,21 @@ small.hint{color:#8a8f9a}
   <header><b>Games on GitHub</b><span style="flex:1"></span><button id="ghReload" class="ib">↻ refresh</button><button id="gamesClose">✕</button></header>
   <div id="gameslist" style="padding:8px 12px;overflow-y:auto;max-height:70vh"></div>
 </div></div>
+<div id="nmodal" class="modal"><div id="nbox" class="mbox" style="width:720px">
+  <header>
+    <b>📖 Encounter notes</b>
+    <button id="nLoad">Upload .md</button>
+    <button id="nParse">Scan stats → add</button>
+    <button id="nSaveMd">Download .md</button>
+    <span style="flex:1"></span>
+    <small class="hint">enemy stat lines above <code>## Players</code>; shared text below</small>
+    <button id="nClose">✕</button>
+  </header>
+  <div style="display:flex;min-height:300px;max-height:64vh">
+    <textarea id="nText" style="flex:1;background:#12141a;color:var(--tx);border:none;border-right:1px solid var(--b);padding:10px;font:12px/1.5 ui-monospace,monospace;resize:none" placeholder="# Goblin Ambush&#10;&#10;Three goblins lurk in the rocks.&#10;&#10;- Goblin | AC 15 | HP 6 | Init +1 | M | x3&#10;- Goblin Boss | AC 17 | HP 18 | Init +2 | M&#10;&#10;## Players&#10;&#10;The path narrows between mossy boulders. You hear chittering ahead."></textarea>
+    <div id="nPrev" style="flex:1;overflow-y:auto;padding:10px 14px;font-size:13px"></div>
+  </div>
+</div></div>
 <div id="msg"></div>
 <script>
 "use strict";
@@ -249,7 +266,7 @@ function freshState(){return{
   v:3,fileId:null,campaign:'',title:'New Encounter',cols:40,rows:24,cs:28,
   palette:[{c:'#7d6608',n:'rock'},{c:'#aed6f1',n:'water'},{c:'#cacfd2',n:'open deck'},{c:'#1b2631',n:'wall'},{c:'#f4f6f7',n:'floor'}],
   terrain:Array(40*24).fill(0),fog:Array(40*24).fill(0),
-  tokens:[],labels:[],round:1,turnId:null,bgImg:null,log:[]
+  tokens:[],labels:[],round:1,turnId:null,bgImg:null,log:[],notes:''
 }}
 function log(s){(st.log=st.log||[]).push(s);if(st.log.length>500)st.log.shift()}
 let lib=[],files={};
@@ -610,6 +627,13 @@ function renderSide(){
         '</div>';
       L.appendChild(d);
     }
+    const shared=playerSection(st.notes||'');
+    if(shared.trim()){
+      const dd=document.createElement('div');
+      dd.style.cssText='border-top:1px solid var(--b);margin-top:8px;padding:8px 4px';
+      dd.innerHTML='<h4 style="padding:0">Description</h4>'+mdToHtml(shared);
+      L.appendChild(dd);
+    }
     return;
   }
   for(const t of sorted()){
@@ -903,6 +927,97 @@ $('#iBg').onclick=()=>{
 };
 function updateBgBtn(){$('#bgRemove').style.display=st.bgImg?'':'none'}
 $('#bgRemove').onclick=()=>{pushUndo();st.bgImg=null;updateBgBtn();touch()};
+
+// ---------- encounter notes (markdown) ----------
+const PLAYER_RE=/^##\s+players\s*$/im;
+function gmSection(md){const m=md.match(PLAYER_RE);return m?md.slice(0,m.index):md}
+function playerSection(md){const m=md.match(PLAYER_RE);return m?md.slice(m.index+m[0].length):''}
+function mdToHtml(md){
+  const lines=md.replace(/\r/g,'').split('\n');
+  let html='',inList=false,inCode=false;
+  const inline=s=>esc(s)
+    .replace(/\*\*([^*]+)\*\*/g,'<b>$1</b>')
+    .replace(/(^|[^*])\*([^*]+)\*/g,'$1<i>$2</i>')
+    .replace(/`([^`]+)`/g,'<code>$1</code>');
+  for(let raw of lines){
+    if(/^```/.test(raw)){inCode=!inCode;html+=inCode?'<pre style="background:#12141a;padding:6px;border-radius:4px;overflow-x:auto">':'</pre>';continue}
+    if(inCode){html+=esc(raw)+'\n';continue}
+    if(/^\s*$/.test(raw)){if(inList){html+='</ul>';inList=false}continue}
+    let m;
+    if(m=raw.match(/^(#{1,4})\s+(.*)/)){
+      if(inList){html+='</ul>';inList=false}
+      const n=m[1].length;html+='<h'+(n+1)+' style="margin:8px 0 4px">'+inline(m[2])+'</h'+(n+1)+'>';
+    }else if(/^\s*[-*]\s+/.test(raw)){
+      if(!inList){html+='<ul style="margin:4px 0;padding-left:18px">';inList=true}
+      html+='<li>'+inline(raw.replace(/^\s*[-*]\s+/,''))+'</li>';
+    }else{
+      if(inList){html+='</ul>';inList=false}
+      html+='<p style="margin:4px 0">'+inline(raw)+'</p>';
+    }
+  }
+  if(inList)html+='</ul>';
+  if(inCode)html+='</pre>';
+  return html;
+}
+function parseStatLine(line){
+  const body=line.replace(/^\s*[-*]\s+/,'');
+  if(!/\|/.test(body))return null;
+  const parts=body.split('|').map(s=>s.trim());
+  const name=parts[0];if(!name)return null;
+  let ac=0,hp=0,init=0,size=1,count=1,matched=false;
+  const SZ={m:1,s:1,l:2,h:3,g:4};
+  for(let i=1;i<parts.length;i++){
+    const p=parts[i];let m;
+    if(m=p.match(/^ac\s*:?\s*(\d+)/i)){ac=+m[1];matched=true}
+    else if(m=p.match(/^hp\s*:?\s*(\d+)/i)){hp=+m[1];matched=true}
+    else if(m=p.match(/^init\s*:?\s*([+-]?\d+)/i)){init=+m[1];matched=true}
+    else if(m=p.match(/^size\s*:?\s*([mslhg])/i)){size=SZ[m[1].toLowerCase()];matched=true}
+    else if(m=p.match(/^x\s*(\d+)$/i)){count=+m[1];matched=true}
+    else if(/^[mslhg]$/i.test(p)){size=SZ[p.toLowerCase()];matched=true}
+  }
+  if(!matched)return null;
+  return{name,ac,hp,init,size,count};
+}
+function parseEncounter(md){
+  return gmSection(md).split('\n').map(parseStatLine).filter(Boolean);
+}
+function renderNotesPrev(){$('#nPrev').innerHTML=mdToHtml($('#nText').value)}
+$('#notesBtn').onclick=()=>{$('#nText').value=st.notes||'';renderNotesPrev();$('#nmodal').style.display='flex'};
+$('#nClose').onclick=()=>{pushUndo();st.notes=$('#nText').value;$('#nmodal').style.display='none';touch()};
+$('#nmodal').onclick=e=>{if(e.target.id==='nmodal'){pushUndo();st.notes=$('#nText').value;$('#nmodal').style.display='none';touch()}};
+$('#nText').oninput=renderNotesPrev;
+$('#nLoad').onclick=()=>$('#mdfile').click();
+$('#mdfile').onchange=e=>{
+  const f=e.target.files[0];if(!f)return;
+  const rd=new FileReader();
+  rd.onload=()=>{$('#nText').value=rd.result;renderNotesPrev();msg('loaded — Scan stats to add enemies')};
+  rd.readAsText(f);e.target.value='';
+};
+$('#nSaveMd').onclick=()=>{
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(new Blob([$('#nText').value],{type:'text/markdown'}));
+  a.download=(st.title||'encounter').replace(/\W+/g,'_')+'.md';a.click();
+};
+$('#nParse').onclick=()=>{
+  const ents=parseEncounter($('#nText').value);
+  if(!ents.length)return msg('no stat lines found (need: Name | AC n | HP n | ...)');
+  pushUndo();st.notes=$('#nText').value;
+  let added=0;
+  const colors=['#c0392b','#8e44ad','#16a085','#d35400','#2980b9','#7f8c8d'];
+  ents.forEach((e,ei)=>{
+    for(let i=0;i<e.count;i++){
+      const nm=e.count>1?e.name+' '+(i+1):e.name;
+      st.tokens.push({id:Date.now()+Math.random(),name:nm,
+        letter:e.name[0].toUpperCase()+(e.count>1?(i+1):''),
+        color:colors[ei%colors.length],size:e.size,img:null,
+        init:e.init,ac:e.ac,hp:e.hp,maxHp:e.hp,pc:false,conds:[],x:-1,y:-1});
+      added++;
+    }
+  });
+  log('R'+st.round+': loaded '+added+' enemies from encounter');
+  $('#nmodal').style.display='none';touch();
+  msg(added+' combatants added — hit 📍 on each to place');
+};
 
 // ---------- top bar ----------
 $('#title').onchange=e=>{st.title=e.target.value;touch()};
