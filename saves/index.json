@@ -16,5 +16,17 @@
         "updated": 1781198307546
       }
     ]
+  },
+  {
+    "game": "Savage tide",
+    "slug": "savage-tide",
+    "maps": [
+      {
+        "slug": "under-parrot-island",
+        "title": "Under Parrot Island",
+        "path": "saves/savage-tide/under-parrot-island.json",
+        "updated": 1781681084237
+      }
+    ]
   }
 ]
